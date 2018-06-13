@@ -1,0 +1,2334 @@
+<folder version="37" creator="Apsim 7.10-r4171" name="simulations">
+  <simulation name="70_Clyde_84">
+    <metfile name="met">
+      <filename name="filename" input="yes">..\Iowa NE.met</filename>
+    </metfile>
+    <clock>
+      <start_date type="date" description="Enter the start date of the simulation">01/01/1999</start_date>
+      <end_date type="date" description="Enter the end date of the simulation">31/12/2009</end_date>
+    </clock>
+    <summaryfile />
+    <area name="paddock">
+      <surfaceom name="SurfaceOrganicMatter">
+        <PoolName type="text" description="Organic Matter pool name">soybean</PoolName>
+        <type type="text" description="Organic Matter type">soybean</type>
+        <mass type="text" description="Initial surface residue (kg/ha)">1250</mass>
+        <cnr type="text" description="C:N ratio of initial residue">27</cnr>
+        <standing_fraction type="text" description="Fraction of residue standing">0.0</standing_fraction>
+      </surfaceom>
+      <fertiliser />
+      <maize />
+      <folder name="Manager folder">
+        <manager name="Sow on a fixed date">
+          <ui>
+            <category type="category" description="Sowing criteria" />
+            <date type="text" description="Enter sowing date (dd-mmm) : ">1-may</date>
+            <category type="category" description="Sowing parameters" />
+            <crop type="crop" description="Enter name of crop to sow : ">maize</crop>
+            <density type="text" description="Enter sowing density  (plants/m2) : ">8</density>
+            <depth type="text" description="Enter sowing depth  (mm) : ">50</depth>
+            <cultivar type="cultivars" description="Enter cultivar : ">A_110</cultivar>
+            <class type="classes" description="Enter crop growth class : ">plant</class>
+            <row_spacing type="text" description="Enter row spacing (mm) : ">760</row_spacing>
+          </ui>
+          <script>
+            <text>
+        if (today = date('[date]') then
+              [crop] sow plants =[density], sowing_depth = [depth], cultivar = [cultivar], row_spacing = [row_spacing], crop_class = [class]
+         endif
+               </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager name="Tillage on fixed date">
+          <ui>
+            <category type="category" description="When should tillage be done" />
+            <tillage_date type="ddmmmdate" description="Enter tillage date (dd-mmm) : ">10-apr</tillage_date>
+            <category type="category" description="Tillage application details" />
+            <surfaceommodule type="modulename" description="Module used to apply the tillage : ">SurfaceOrganicMatter</surfaceommodule>
+            <tillage_type type="list" listvalues="user_defined, chisel, disc, planter, burn, burn_90, graze, scarifier, rip, blade, tine" description="Tillage type : ">user_defined</tillage_type>
+            <tillage_depth type="text" description="User_defined depth of seedbed preparation (mm) : ">110</tillage_depth>
+            <tillage_f_incorp type="text" description="User_defined fraction of surface residues to incorporate (0-1): ">0.4</tillage_f_incorp>
+          </ui>
+          <script>
+            <text>
+         if (today = date('[tillage_date]') then
+            if ('[tillage_type]' = 'user_defined') then
+                '[surfaceommodule]' tillage type = [tillage_type], f_incorp = [tillage_f_incorp] (), tillage_depth = [tillage_depth]
+            else
+                '[surfaceommodule]' tillage type = [tillage_type]
+            endif
+            ready_to_till_pre_sow = 0
+            till_day_pre_sow = 0
+         endif
+      </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager name="Fertilise on fixed date">
+          <ui>
+            <category type="category" description="When should fertiliser be applied" />
+            <fert_date type="ddmmmdate" description="Enter fertiliser date (dd-mmm) : ">1-may</fert_date>
+            <fert_criteria type="text" description="Don't add fertiliser if N in top 2 layers exceeds (kg/ha) : ">1000</fert_criteria>
+            <category type="category" description="Fertiliser application details" />
+            <fertmodule type="modulename" description="Module used to apply the fertiliser : ">fertiliser</fertmodule>
+            <fert_amount type="text" description="Amount of fertiliser to apply (kg/ha) : ">280</fert_amount>
+            <fert_type type="list" listvalues="NO3_N, NH4_N, NH4NO3, urea_N, urea_no3, urea, nh4so4_n, rock_p, banded_p, broadcast_p" description="Fertiliser type : ">urea_N</fert_type>
+          </ui>
+          <script>
+            <text>
+         if (today = date('[fert_date]') then
+            N_topsoil = no3(1) + nh4(1) + no3(2) + nh4(2)
+            if (N_topsoil &lt; [fert_criteria]) then
+               [fertmodule] apply amount = [fert_amount] (kg/ha), depth = 50 (mm), type = [fert_type] ()
+            endif
+         endif </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager2 name="Corn Nitrogen Prices (put before harvest rule)">
+          <ui>
+            <corn_price type="text" description="Corn price ($/bu)">5</corn_price>
+            <n_price type="text" description="Nitrogen price ($/lbs)">0.5</n_price>
+            <fixed_cost type="text" description="Fixed costs ($/acre)">600</fixed_cost>
+          </ui>
+          <text>
+using System;
+using ModelFramework;
+
+public class Script 
+{      
+   [Link] Paddock MyPaddock; // Can be used to dynamically get access to simulation structure and variables
+   [Input] DateTime Today;   // Equates to the value of the current simulation date - value comes from CLOCK
+   [Input] double fertiliser;
+   [Param] double corn_price;         // The value for this will come from the Properties page.
+   [Param] double n_price;
+   [Param] double fixed_cost;
+   [Output] double N_rate_lbs_acre;
+   [Output] double GrossReturns;
+   [Output] double Ncost;
+   [Output] double FixedCost;
+   [Output] double NetReturn;// An example of how to make a variable available to other APSIM modules
+   
+   double maize_yield;
+
+   [Output] double fert_applied;
+   
+   // The following event handler will be called once at the beginning of the simulation
+   [EventHandler] public void OnInitialised()
+   {
+      fert_applied = 0.0;
+   }
+      
+   // The following event handler will be called each day at the beginning of the day
+   [EventHandler] public void OnPrepare()
+   {
+      fert_applied += fertiliser;
+      MyPaddock.Get("maize.yield", out maize_yield);
+      double maize_buac = maize_yield * 0.0159 / 0.85;
+      
+      N_rate_lbs_acre = fert_applied * 0.89;
+      GrossReturns = corn_price * maize_buac;
+      Ncost = N_rate_lbs_acre * n_price;
+      FixedCost = fixed_cost;
+      NetReturn = GrossReturns - FixedCost - Ncost;
+   }
+   
+   [EventHandler] public void OnHarvesting()
+   {
+      fert_applied = 0.0;
+   }
+   
+}
+       </text>
+        </manager2>
+        <manager name="Harvesting rule">
+          <ui>
+            <category type="category" description="Harvesting criteria" />
+            <crop type="crop" description="Enter name of crop to harvest when ripe : ">maize</crop>
+          </ui>
+          <script>
+            <text>
+           if ('[crop]' = 'cotton') then
+              if ([crop].ozcot_status &gt; 0) then
+                  [crop] harvest
+              endif
+           elseif ([crop].StageName = 'harvest_ripe' or [crop].plant_status = 'dead') then
+              [crop]  harvest
+              [crop]  end_crop
+           endif
+</text>
+            <event>end_of_day</event>
+          </script>
+        </manager>
+        <manager name="Empty manager">
+          <script>
+            <text>
+            </text>
+            <event>init</event>
+          </script>
+          <script>
+            <text>corn_buac   = maize.yield * 0.0159/0.85  ! corn yield in bushels/acre @15% moisture  
+Nupt_biomass   = biomass_n * 10 * 0.89     ! Above ground corn biomass N uptake in lbs N/acre
+Nupt_grain     = grain_n * 10 * 0.89     !  corn grain N uptake in lbs N/acre
+
+</text>
+            <event>start_of_day</event>
+          </script>
+          <script>
+            <text>
+            </text>
+            <event>end_of_day</event>
+          </script>
+        </manager>
+        <tracker />
+      </folder>
+      <outputfile>
+        <filename output="yes">70_Clyde_84.out</filename>
+        <title>70_Clyde_84</title>
+        <variables name="My Variables">
+          <variable>dd/mm/yyyy as Date</variable>
+          <variable>fert_applied</variable>
+          <variable>corn_buac</variable>
+          <variable>GrossReturns</variable>
+          <variable>NetReturn</variable>
+          <variable>Ncost</variable>
+          <variable>FixedCost</variable>
+          <variable>Nupt_biomass</variable>
+          <variable>biomass</variable>
+          <variable>plants</variable>
+        </variables>
+        <events name="My Variables Events">
+          <event>harvesting</event>
+        </events>
+      </outputfile>
+  <Soil name="(Clyde_84 7% of AOI)">
+    <RecordNumber>2</RecordNumber>
+    <SoilType>Clyde_84</SoilType>
+    <Region>Floyd</Region>
+    <State>Iowa</State>
+    <Country>USA</Country>
+    <ApsoilNumber>1</ApsoilNumber>
+    <Latitude>42.93</Latitude>
+    <Longitude>-92.57</Longitude>
+    <YearOfSampling>2018</YearOfSampling>
+    <DataSource>ssurgo2apsim</DataSource>
+    <Comments>This soil was created with data from SSURGO Database, downloaded in R via the FedData package and parameters set using the approach described by Archontoulis et al. (2014, Agron. J. 106(3):1025-1040). This soil type represents 7% of AOI.</Comments>
+    <Water>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <BD>
+        <double>1.35</double>
+        <double>1.35</double>
+        <double>1.38</double>
+        <double>1.42</double>
+        <double>1.5</double>
+        <double>1.48</double>
+        <double>1.45</double>
+        <double>1.67</double>
+        <double>1.7</double>
+      </BD>
+      <AirDry>
+        <double>0.22</double>
+        <double>0.23</double>
+        <double>0.22</double>
+        <double>0.2</double>
+        <double>0.2</double>
+        <double>0.17</double>
+        <double>0.11</double>
+        <double>0.13</double>
+        <double>0.13</double>
+      </AirDry>
+      <LL15>
+        <double>0.25</double>
+        <double>0.24</double>
+        <double>0.22</double>
+        <double>0.2</double>
+        <double>0.2</double>
+        <double>0.17</double>
+        <double>0.11</double>
+        <double>0.13</double>
+        <double>0.13</double>
+      </LL15>
+      <DUL>
+        <double>0.35</double>
+        <double>0.35</double>
+        <double>0.33</double>
+        <double>0.32</double>
+        <double>0.32</double>
+        <double>0.3</double>
+        <double>0.21</double>
+        <double>0.27</double>
+        <double>0.28</double>
+      </DUL>
+      <SAT>
+        <double>0.45</double>
+        <double>0.45</double>
+        <double>0.44</double>
+        <double>0.44</double>
+        <double>0.43</double>
+        <double>0.42</double>
+        <double>0.39</double>
+        <double>0.39</double>
+        <double>0.39</double>
+      </SAT>
+      <KS>
+        <double>58.19</double>
+        <double>58.14</double>
+        <double>57.74</double>
+        <double>59.48</double>
+        <double>64.8</double>
+        <double>89.68</double>
+        <double>423.27</double>
+        <double>140.54</double>
+        <double>60.5</double>
+      </KS>
+      <SoilCrop name="maize">
+        <Thickness>
+          <double>100</double>
+          <double>200</double>
+          <double>150</double>
+          <double>150</double>
+          <double>200</double>
+          <double>200</double>
+          <double>200</double>
+          <double>400</double>
+          <double>390</double>
+        </Thickness>
+        <LL>
+          <double>0.25</double>
+          <double>0.24</double>
+          <double>0.22</double>
+          <double>0.2</double>
+          <double>0.2</double>
+          <double>0.17</double>
+          <double>0.11</double>
+          <double>0.13</double>
+          <double>0.13</double>
+        </LL>
+        <KL>
+          <double>0.08</double>
+          <double>0.078</double>
+          <double>0.069</double>
+          <double>0.062</double>
+          <double>0.055</double>
+          <double>0.048</double>
+          <double>0.042</double>
+          <double>0.034</double>
+          <double>0.026</double>
+        </KL>
+        <XF>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>0.75</double>
+          <double>0</double>
+        </XF>
+      </SoilCrop>
+      <SoilCrop name="soybean">
+        <Thickness>
+          <double>100</double>
+          <double>200</double>
+          <double>150</double>
+          <double>150</double>
+          <double>200</double>
+          <double>200</double>
+          <double>200</double>
+          <double>400</double>
+          <double>390</double>
+        </Thickness>
+        <LL>
+          <double>0.25</double>
+          <double>0.24</double>
+          <double>0.22</double>
+          <double>0.2</double>
+          <double>0.2</double>
+          <double>0.17</double>
+          <double>0.11</double>
+          <double>0.13</double>
+          <double>0.13</double>
+        </LL>
+        <KL>
+          <double>0.08</double>
+          <double>0.078</double>
+          <double>0.069</double>
+          <double>0.062</double>
+          <double>0.055</double>
+          <double>0.048</double>
+          <double>0.042</double>
+          <double>0.034</double>
+          <double>0.026</double>
+        </KL>
+        <XF>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>0.75</double>
+          <double>0</double>
+        </XF>
+      </SoilCrop>
+    </Water>
+    <SoilWater>
+      <SummerCona>4</SummerCona>
+      <SummerU>9</SummerU>
+      <SummerDate>1-jun</SummerDate>
+      <WinterCona>4</WinterCona>
+      <WinterU>9</WinterU>
+      <WinterDate>1-nov</WinterDate>
+      <DiffusConst>40</DiffusConst>
+      <DiffusSlope>16</DiffusSlope>
+      <Salb>0.15</Salb>
+      <CN2Bare>82</CN2Bare>
+      <CNRed>20</CNRed>
+      <CNCov>0.8</CNCov>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <SWCON>
+        <double>0.287</double>
+        <double>0.288</double>
+        <double>0.303</double>
+        <double>0.302</double>
+        <double>0.254</double>
+        <double>0.327</double>
+        <double>0.54</double>
+        <double>0.268</double>
+        <double>0.222</double>
+      </SWCON>
+    </SoilWater>
+    <SoilOrganicMatter>
+      <RootCN>45</RootCN>
+      <RootWt>1000</RootWt>
+      <SoilCN>13</SoilCN>
+      <EnrACoeff>7.4</EnrACoeff>
+      <EnrBCoeff>0.2</EnrBCoeff>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <OC>
+        <double>4.36</double>
+        <double>4.22</double>
+        <double>2.86</double>
+        <double>1.47</double>
+        <double>0.77</double>
+        <double>0.68</double>
+        <double>0.44</double>
+        <double>0.1</double>
+        <double>0.01</double>
+      </OC>
+      <FBiom>
+        <double>0.04</double>
+        <double>0.0245</double>
+        <double>0.014</double>
+        <double>0.011</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+      </FBiom>
+      <FInert>
+        <double>0.4</double>
+        <double>0.484</double>
+        <double>0.624</double>
+        <double>0.744</double>
+        <double>0.8</double>
+        <double>0.8</double>
+        <double>0.8</double>
+        <double>0.8696</double>
+        <double>0.9773</double>
+      </FInert>
+      <OCUnits>Total</OCUnits>
+    </SoilOrganicMatter>
+    <Analysis>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <PH>
+        <double>7.62</double>
+        <double>7.62</double>
+        <double>7.62</double>
+        <double>7.62</double>
+        <double>7.62</double>
+        <double>7.68</double>
+        <double>7.91</double>
+        <double>8.16</double>
+        <double>8.99</double>
+      </PH>
+      <ParticleSizeSand>
+        <double>18</double>
+        <double>18</double>
+        <double>18</double>
+        <double>20.6</double>
+        <double>26.2</double>
+        <double>26.7</double>
+        <double>58.3</double>
+        <double>47</double>
+        <double>45</double>
+      </ParticleSizeSand>
+      <ParticleSizeClay>
+        <double>30</double>
+        <double>30</double>
+        <double>30</double>
+        <double>30</double>
+        <double>30</double>
+        <double>27.2</double>
+        <double>16.9</double>
+        <double>19.5</double>
+        <double>20</double>
+      </ParticleSizeClay>
+      <ParticleSizeSilt>
+        <double>52</double>
+        <double>52</double>
+        <double>52</double>
+        <double>49.4</double>
+        <double>43.8</double>
+        <double>46.1</double>
+        <double>24.7</double>
+        <double>33.5</double>
+        <double>35</double>
+      </ParticleSizeSilt>
+    </Analysis>
+    <Sample name="Intial conditions">
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <NO3>
+        <double>4.36</double>
+        <double>4.22</double>
+        <double>2.86</double>
+        <double>1.47</double>
+        <double>0.77</double>
+        <double>0.68</double>
+        <double>0.44</double>
+        <double>0.1</double>
+        <double>0.01</double>
+      </NO3>
+      <NH4>
+        <double>2.18</double>
+        <double>2.11</double>
+        <double>1.43</double>
+        <double>0.73</double>
+        <double>0.38</double>
+        <double>0.34</double>
+        <double>0.22</double>
+        <double>0.05</double>
+        <double>0</double>
+      </NH4>
+      <SW>
+        <double>0.35</double>
+        <double>0.35</double>
+        <double>0.33</double>
+        <double>0.32</double>
+        <double>0.32</double>
+        <double>0.3</double>
+        <double>0.21</double>
+        <double>0.27</double>
+        <double>0.28</double>
+      </SW>
+      <NO3Units>ppm</NO3Units>
+      <NH4Units>ppm</NH4Units>
+      <SWUnits>Volumetric</SWUnits>
+    </Sample>
+  </Soil>
+    </area>
+  </simulation>
+  <simulation name="70_Floyd_198B">
+    <metfile name="met">
+      <filename name="filename" input="yes">..\Iowa NE.met</filename>
+    </metfile>
+    <clock>
+      <start_date type="date" description="Enter the start date of the simulation">01/01/1999</start_date>
+      <end_date type="date" description="Enter the end date of the simulation">31/12/2009</end_date>
+    </clock>
+    <summaryfile />
+    <area name="paddock">
+      <surfaceom name="SurfaceOrganicMatter">
+        <PoolName type="text" description="Organic Matter pool name">soybean</PoolName>
+        <type type="text" description="Organic Matter type">soybean</type>
+        <mass type="text" description="Initial surface residue (kg/ha)">1250</mass>
+        <cnr type="text" description="C:N ratio of initial residue">27</cnr>
+        <standing_fraction type="text" description="Fraction of residue standing">0.0</standing_fraction>
+      </surfaceom>
+      <fertiliser />
+      <maize />
+      <folder name="Manager folder">
+        <manager name="Sow on a fixed date">
+          <ui>
+            <category type="category" description="Sowing criteria" />
+            <date type="text" description="Enter sowing date (dd-mmm) : ">1-may</date>
+            <category type="category" description="Sowing parameters" />
+            <crop type="crop" description="Enter name of crop to sow : ">maize</crop>
+            <density type="text" description="Enter sowing density  (plants/m2) : ">8</density>
+            <depth type="text" description="Enter sowing depth  (mm) : ">50</depth>
+            <cultivar type="cultivars" description="Enter cultivar : ">A_110</cultivar>
+            <class type="classes" description="Enter crop growth class : ">plant</class>
+            <row_spacing type="text" description="Enter row spacing (mm) : ">760</row_spacing>
+          </ui>
+          <script>
+            <text>
+        if (today = date('[date]') then
+              [crop] sow plants =[density], sowing_depth = [depth], cultivar = [cultivar], row_spacing = [row_spacing], crop_class = [class]
+         endif
+               </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager name="Tillage on fixed date">
+          <ui>
+            <category type="category" description="When should tillage be done" />
+            <tillage_date type="ddmmmdate" description="Enter tillage date (dd-mmm) : ">10-apr</tillage_date>
+            <category type="category" description="Tillage application details" />
+            <surfaceommodule type="modulename" description="Module used to apply the tillage : ">SurfaceOrganicMatter</surfaceommodule>
+            <tillage_type type="list" listvalues="user_defined, chisel, disc, planter, burn, burn_90, graze, scarifier, rip, blade, tine" description="Tillage type : ">user_defined</tillage_type>
+            <tillage_depth type="text" description="User_defined depth of seedbed preparation (mm) : ">110</tillage_depth>
+            <tillage_f_incorp type="text" description="User_defined fraction of surface residues to incorporate (0-1): ">0.4</tillage_f_incorp>
+          </ui>
+          <script>
+            <text>
+         if (today = date('[tillage_date]') then
+            if ('[tillage_type]' = 'user_defined') then
+                '[surfaceommodule]' tillage type = [tillage_type], f_incorp = [tillage_f_incorp] (), tillage_depth = [tillage_depth]
+            else
+                '[surfaceommodule]' tillage type = [tillage_type]
+            endif
+            ready_to_till_pre_sow = 0
+            till_day_pre_sow = 0
+         endif
+      </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager name="Fertilise on fixed date">
+          <ui>
+            <category type="category" description="When should fertiliser be applied" />
+            <fert_date type="ddmmmdate" description="Enter fertiliser date (dd-mmm) : ">1-may</fert_date>
+            <fert_criteria type="text" description="Don't add fertiliser if N in top 2 layers exceeds (kg/ha) : ">1000</fert_criteria>
+            <category type="category" description="Fertiliser application details" />
+            <fertmodule type="modulename" description="Module used to apply the fertiliser : ">fertiliser</fertmodule>
+            <fert_amount type="text" description="Amount of fertiliser to apply (kg/ha) : ">280</fert_amount>
+            <fert_type type="list" listvalues="NO3_N, NH4_N, NH4NO3, urea_N, urea_no3, urea, nh4so4_n, rock_p, banded_p, broadcast_p" description="Fertiliser type : ">urea_N</fert_type>
+          </ui>
+          <script>
+            <text>
+         if (today = date('[fert_date]') then
+            N_topsoil = no3(1) + nh4(1) + no3(2) + nh4(2)
+            if (N_topsoil &lt; [fert_criteria]) then
+               [fertmodule] apply amount = [fert_amount] (kg/ha), depth = 50 (mm), type = [fert_type] ()
+            endif
+         endif </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager2 name="Corn Nitrogen Prices (put before harvest rule)">
+          <ui>
+            <corn_price type="text" description="Corn price ($/bu)">5</corn_price>
+            <n_price type="text" description="Nitrogen price ($/lbs)">0.5</n_price>
+            <fixed_cost type="text" description="Fixed costs ($/acre)">600</fixed_cost>
+          </ui>
+          <text>
+using System;
+using ModelFramework;
+
+public class Script 
+{      
+   [Link] Paddock MyPaddock; // Can be used to dynamically get access to simulation structure and variables
+   [Input] DateTime Today;   // Equates to the value of the current simulation date - value comes from CLOCK
+   [Input] double fertiliser;
+   [Param] double corn_price;         // The value for this will come from the Properties page.
+   [Param] double n_price;
+   [Param] double fixed_cost;
+   [Output] double N_rate_lbs_acre;
+   [Output] double GrossReturns;
+   [Output] double Ncost;
+   [Output] double FixedCost;
+   [Output] double NetReturn;// An example of how to make a variable available to other APSIM modules
+   
+   double maize_yield;
+
+   [Output] double fert_applied;
+   
+   // The following event handler will be called once at the beginning of the simulation
+   [EventHandler] public void OnInitialised()
+   {
+      fert_applied = 0.0;
+   }
+      
+   // The following event handler will be called each day at the beginning of the day
+   [EventHandler] public void OnPrepare()
+   {
+      fert_applied += fertiliser;
+      MyPaddock.Get("maize.yield", out maize_yield);
+      double maize_buac = maize_yield * 0.0159 / 0.85;
+      
+      N_rate_lbs_acre = fert_applied * 0.89;
+      GrossReturns = corn_price * maize_buac;
+      Ncost = N_rate_lbs_acre * n_price;
+      FixedCost = fixed_cost;
+      NetReturn = GrossReturns - FixedCost - Ncost;
+   }
+   
+   [EventHandler] public void OnHarvesting()
+   {
+      fert_applied = 0.0;
+   }
+   
+}
+       </text>
+        </manager2>
+        <manager name="Harvesting rule">
+          <ui>
+            <category type="category" description="Harvesting criteria" />
+            <crop type="crop" description="Enter name of crop to harvest when ripe : ">maize</crop>
+          </ui>
+          <script>
+            <text>
+           if ('[crop]' = 'cotton') then
+              if ([crop].ozcot_status &gt; 0) then
+                  [crop] harvest
+              endif
+           elseif ([crop].StageName = 'harvest_ripe' or [crop].plant_status = 'dead') then
+              [crop]  harvest
+              [crop]  end_crop
+           endif
+</text>
+            <event>end_of_day</event>
+          </script>
+        </manager>
+        <manager name="Empty manager">
+          <script>
+            <text>
+            </text>
+            <event>init</event>
+          </script>
+          <script>
+            <text>corn_buac   = maize.yield * 0.0159/0.85  ! corn yield in bushels/acre @15% moisture  
+Nupt_biomass   = biomass_n * 10 * 0.89     ! Above ground corn biomass N uptake in lbs N/acre
+Nupt_grain     = grain_n * 10 * 0.89     !  corn grain N uptake in lbs N/acre
+
+</text>
+            <event>start_of_day</event>
+          </script>
+          <script>
+            <text>
+            </text>
+            <event>end_of_day</event>
+          </script>
+        </manager>
+        <tracker />
+      </folder>
+      <outputfile>
+        <filename output="yes">70_Floyd_198B.out</filename>
+        <title>70_Floyd_198B</title>
+        <variables name="My Variables">
+          <variable>dd/mm/yyyy as Date</variable>
+          <variable>fert_applied</variable>
+          <variable>corn_buac</variable>
+          <variable>GrossReturns</variable>
+          <variable>NetReturn</variable>
+          <variable>Ncost</variable>
+          <variable>FixedCost</variable>
+          <variable>Nupt_biomass</variable>
+          <variable>biomass</variable>
+          <variable>plants</variable>
+        </variables>
+        <events name="My Variables Events">
+          <event>harvesting</event>
+        </events>
+      </outputfile>
+  <Soil name="(Floyd_198B 18% of AOI)">
+    <RecordNumber>3</RecordNumber>
+    <SoilType>Floyd_198B</SoilType>
+    <Region>Floyd</Region>
+    <State>Iowa</State>
+    <Country>USA</Country>
+    <ApsoilNumber>1</ApsoilNumber>
+    <Latitude>42.93</Latitude>
+    <Longitude>-92.57</Longitude>
+    <YearOfSampling>2018</YearOfSampling>
+    <DataSource>ssurgo2apsim</DataSource>
+    <Comments>This soil was created with data from SSURGO Database, downloaded in R via the FedData package and parameters set using the approach described by Archontoulis et al. (2014, Agron. J. 106(3):1025-1040). This soil type represents 18% of AOI.</Comments>
+    <Water>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <BD>
+        <double>1.35</double>
+        <double>1.35</double>
+        <double>1.38</double>
+        <double>1.41</double>
+        <double>1.44</double>
+        <double>1.42</double>
+        <double>1.61</double>
+        <double>1.7</double>
+        <double>1.7</double>
+      </BD>
+      <AirDry>
+        <double>0.16</double>
+        <double>0.16</double>
+        <double>0.17</double>
+        <double>0.16</double>
+        <double>0.14</double>
+        <double>0.1</double>
+        <double>0.12</double>
+        <double>0.13</double>
+        <double>0.13</double>
+      </AirDry>
+      <LL15>
+        <double>0.17</double>
+        <double>0.17</double>
+        <double>0.17</double>
+        <double>0.16</double>
+        <double>0.14</double>
+        <double>0.1</double>
+        <double>0.12</double>
+        <double>0.13</double>
+        <double>0.13</double>
+      </LL15>
+      <DUL>
+        <double>0.31</double>
+        <double>0.31</double>
+        <double>0.3</double>
+        <double>0.29</double>
+        <double>0.23</double>
+        <double>0.2</double>
+        <double>0.24</double>
+        <double>0.26</double>
+        <double>0.27</double>
+      </DUL>
+      <SAT>
+        <double>0.41</double>
+        <double>0.41</double>
+        <double>0.41</double>
+        <double>0.41</double>
+        <double>0.39</double>
+        <double>0.39</double>
+        <double>0.39</double>
+        <double>0.4</double>
+        <double>0.4</double>
+      </SAT>
+      <KS>
+        <double>115.3</double>
+        <double>115.27</double>
+        <double>115.08</double>
+        <double>130.43</double>
+        <double>246.84</double>
+        <double>505.28</double>
+        <double>235.95</double>
+        <double>60.5</double>
+        <double>60.5</double>
+      </KS>
+      <SoilCrop name="maize">
+        <Thickness>
+          <double>100</double>
+          <double>200</double>
+          <double>150</double>
+          <double>150</double>
+          <double>200</double>
+          <double>200</double>
+          <double>200</double>
+          <double>400</double>
+          <double>390</double>
+        </Thickness>
+        <LL>
+          <double>0.17</double>
+          <double>0.17</double>
+          <double>0.17</double>
+          <double>0.16</double>
+          <double>0.14</double>
+          <double>0.1</double>
+          <double>0.12</double>
+          <double>0.13</double>
+          <double>0.13</double>
+        </LL>
+        <KL>
+          <double>0.08</double>
+          <double>0.078</double>
+          <double>0.069</double>
+          <double>0.062</double>
+          <double>0.055</double>
+          <double>0.048</double>
+          <double>0.042</double>
+          <double>0.034</double>
+          <double>0.026</double>
+        </KL>
+        <XF>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>0.75</double>
+          <double>0</double>
+        </XF>
+      </SoilCrop>
+      <SoilCrop name="soybean">
+        <Thickness>
+          <double>100</double>
+          <double>200</double>
+          <double>150</double>
+          <double>150</double>
+          <double>200</double>
+          <double>200</double>
+          <double>200</double>
+          <double>400</double>
+          <double>390</double>
+        </Thickness>
+        <LL>
+          <double>0.17</double>
+          <double>0.17</double>
+          <double>0.17</double>
+          <double>0.16</double>
+          <double>0.14</double>
+          <double>0.1</double>
+          <double>0.12</double>
+          <double>0.13</double>
+          <double>0.13</double>
+        </LL>
+        <KL>
+          <double>0.08</double>
+          <double>0.078</double>
+          <double>0.069</double>
+          <double>0.062</double>
+          <double>0.055</double>
+          <double>0.048</double>
+          <double>0.042</double>
+          <double>0.034</double>
+          <double>0.026</double>
+        </KL>
+        <XF>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>0.75</double>
+          <double>0</double>
+        </XF>
+      </SoilCrop>
+    </Water>
+    <SoilWater>
+      <SummerCona>3.83</SummerCona>
+      <SummerU>8.65</SummerU>
+      <SummerDate>1-jun</SummerDate>
+      <WinterCona>3.83</WinterCona>
+      <WinterU>8.65</WinterU>
+      <WinterDate>1-nov</WinterDate>
+      <DiffusConst>40</DiffusConst>
+      <DiffusSlope>16</DiffusSlope>
+      <Salb>0.15</Salb>
+      <CN2Bare>78</CN2Bare>
+      <CNRed>20</CNRed>
+      <CNCov>0.8</CNCov>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <SWCON>
+        <double>0.37</double>
+        <double>0.37</double>
+        <double>0.366</double>
+        <double>0.382</double>
+        <double>0.492</double>
+        <double>0.575</double>
+        <double>0.382</double>
+        <double>0.263</double>
+        <double>0.252</double>
+      </SWCON>
+    </SoilWater>
+    <SoilOrganicMatter>
+      <RootCN>45</RootCN>
+      <RootWt>1000</RootWt>
+      <SoilCN>13</SoilCN>
+      <EnrACoeff>7.4</EnrACoeff>
+      <EnrBCoeff>0.2</EnrBCoeff>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <OC>
+        <double>2.33</double>
+        <double>2.29</double>
+        <double>2.02</double>
+        <double>1.68</double>
+        <double>1.03</double>
+        <double>0.55</double>
+        <double>0.34</double>
+        <double>0.22</double>
+        <double>0.02</double>
+      </OC>
+      <FBiom>
+        <double>0.04</double>
+        <double>0.0245</double>
+        <double>0.014</double>
+        <double>0.011</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+      </FBiom>
+      <FInert>
+        <double>0.4</double>
+        <double>0.484</double>
+        <double>0.624</double>
+        <double>0.744</double>
+        <double>0.8</double>
+        <double>0.8</double>
+        <double>0.8</double>
+        <double>0.8696</double>
+        <double>0.9773</double>
+      </FInert>
+      <OCUnits>Total</OCUnits>
+    </SoilOrganicMatter>
+    <Analysis>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <PH>
+        <double>7.62</double>
+        <double>7.62</double>
+        <double>7.62</double>
+        <double>7.62</double>
+        <double>7.62</double>
+        <double>7.62</double>
+        <double>7.64</double>
+        <double>8.38</double>
+        <double>9.1</double>
+      </PH>
+      <ParticleSizeSand>
+        <double>30</double>
+        <double>30</double>
+        <double>30</double>
+        <double>33.4</double>
+        <double>51.5</double>
+        <double>65.5</double>
+        <double>52.1</double>
+        <double>44.5</double>
+        <double>44</double>
+      </ParticleSizeSand>
+      <ParticleSizeClay>
+        <double>23</double>
+        <double>23</double>
+        <double>23</double>
+        <double>22.7</double>
+        <double>21</double>
+        <double>16.7</double>
+        <double>20.7</double>
+        <double>22.5</double>
+        <double>22</double>
+      </ParticleSizeClay>
+      <ParticleSizeSilt>
+        <double>47</double>
+        <double>47</double>
+        <double>47</double>
+        <double>43.9</double>
+        <double>27.5</double>
+        <double>17.8</double>
+        <double>27.2</double>
+        <double>33</double>
+        <double>34</double>
+      </ParticleSizeSilt>
+    </Analysis>
+    <Sample name="Intial conditions">
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <NO3>
+        <double>2.33</double>
+        <double>2.29</double>
+        <double>2.02</double>
+        <double>1.68</double>
+        <double>1.03</double>
+        <double>0.55</double>
+        <double>0.34</double>
+        <double>0.22</double>
+        <double>0.02</double>
+      </NO3>
+      <NH4>
+        <double>1.16</double>
+        <double>1.15</double>
+        <double>1.01</double>
+        <double>0.84</double>
+        <double>0.52</double>
+        <double>0.28</double>
+        <double>0.17</double>
+        <double>0.11</double>
+        <double>0.01</double>
+      </NH4>
+      <SW>
+        <double>0.31</double>
+        <double>0.31</double>
+        <double>0.3</double>
+        <double>0.29</double>
+        <double>0.23</double>
+        <double>0.2</double>
+        <double>0.24</double>
+        <double>0.26</double>
+        <double>0.27</double>
+      </SW>
+      <NO3Units>ppm</NO3Units>
+      <NH4Units>ppm</NH4Units>
+      <SWUnits>Volumetric</SWUnits>
+    </Sample>
+  </Soil>
+    </area>
+  </simulation>
+  <simulation name="70_Kenyon_83B">
+    <metfile name="met">
+      <filename name="filename" input="yes">..\Iowa NE.met</filename>
+    </metfile>
+    <clock>
+      <start_date type="date" description="Enter the start date of the simulation">01/01/1999</start_date>
+      <end_date type="date" description="Enter the end date of the simulation">31/12/2009</end_date>
+    </clock>
+    <summaryfile />
+    <area name="paddock">
+      <surfaceom name="SurfaceOrganicMatter">
+        <PoolName type="text" description="Organic Matter pool name">soybean</PoolName>
+        <type type="text" description="Organic Matter type">soybean</type>
+        <mass type="text" description="Initial surface residue (kg/ha)">1250</mass>
+        <cnr type="text" description="C:N ratio of initial residue">27</cnr>
+        <standing_fraction type="text" description="Fraction of residue standing">0.0</standing_fraction>
+      </surfaceom>
+      <fertiliser />
+      <maize />
+      <folder name="Manager folder">
+        <manager name="Sow on a fixed date">
+          <ui>
+            <category type="category" description="Sowing criteria" />
+            <date type="text" description="Enter sowing date (dd-mmm) : ">1-may</date>
+            <category type="category" description="Sowing parameters" />
+            <crop type="crop" description="Enter name of crop to sow : ">maize</crop>
+            <density type="text" description="Enter sowing density  (plants/m2) : ">8</density>
+            <depth type="text" description="Enter sowing depth  (mm) : ">50</depth>
+            <cultivar type="cultivars" description="Enter cultivar : ">A_110</cultivar>
+            <class type="classes" description="Enter crop growth class : ">plant</class>
+            <row_spacing type="text" description="Enter row spacing (mm) : ">760</row_spacing>
+          </ui>
+          <script>
+            <text>
+        if (today = date('[date]') then
+              [crop] sow plants =[density], sowing_depth = [depth], cultivar = [cultivar], row_spacing = [row_spacing], crop_class = [class]
+         endif
+               </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager name="Tillage on fixed date">
+          <ui>
+            <category type="category" description="When should tillage be done" />
+            <tillage_date type="ddmmmdate" description="Enter tillage date (dd-mmm) : ">10-apr</tillage_date>
+            <category type="category" description="Tillage application details" />
+            <surfaceommodule type="modulename" description="Module used to apply the tillage : ">SurfaceOrganicMatter</surfaceommodule>
+            <tillage_type type="list" listvalues="user_defined, chisel, disc, planter, burn, burn_90, graze, scarifier, rip, blade, tine" description="Tillage type : ">user_defined</tillage_type>
+            <tillage_depth type="text" description="User_defined depth of seedbed preparation (mm) : ">110</tillage_depth>
+            <tillage_f_incorp type="text" description="User_defined fraction of surface residues to incorporate (0-1): ">0.4</tillage_f_incorp>
+          </ui>
+          <script>
+            <text>
+         if (today = date('[tillage_date]') then
+            if ('[tillage_type]' = 'user_defined') then
+                '[surfaceommodule]' tillage type = [tillage_type], f_incorp = [tillage_f_incorp] (), tillage_depth = [tillage_depth]
+            else
+                '[surfaceommodule]' tillage type = [tillage_type]
+            endif
+            ready_to_till_pre_sow = 0
+            till_day_pre_sow = 0
+         endif
+      </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager name="Fertilise on fixed date">
+          <ui>
+            <category type="category" description="When should fertiliser be applied" />
+            <fert_date type="ddmmmdate" description="Enter fertiliser date (dd-mmm) : ">1-may</fert_date>
+            <fert_criteria type="text" description="Don't add fertiliser if N in top 2 layers exceeds (kg/ha) : ">1000</fert_criteria>
+            <category type="category" description="Fertiliser application details" />
+            <fertmodule type="modulename" description="Module used to apply the fertiliser : ">fertiliser</fertmodule>
+            <fert_amount type="text" description="Amount of fertiliser to apply (kg/ha) : ">280</fert_amount>
+            <fert_type type="list" listvalues="NO3_N, NH4_N, NH4NO3, urea_N, urea_no3, urea, nh4so4_n, rock_p, banded_p, broadcast_p" description="Fertiliser type : ">urea_N</fert_type>
+          </ui>
+          <script>
+            <text>
+         if (today = date('[fert_date]') then
+            N_topsoil = no3(1) + nh4(1) + no3(2) + nh4(2)
+            if (N_topsoil &lt; [fert_criteria]) then
+               [fertmodule] apply amount = [fert_amount] (kg/ha), depth = 50 (mm), type = [fert_type] ()
+            endif
+         endif </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager2 name="Corn Nitrogen Prices (put before harvest rule)">
+          <ui>
+            <corn_price type="text" description="Corn price ($/bu)">5</corn_price>
+            <n_price type="text" description="Nitrogen price ($/lbs)">0.5</n_price>
+            <fixed_cost type="text" description="Fixed costs ($/acre)">600</fixed_cost>
+          </ui>
+          <text>
+using System;
+using ModelFramework;
+
+public class Script 
+{      
+   [Link] Paddock MyPaddock; // Can be used to dynamically get access to simulation structure and variables
+   [Input] DateTime Today;   // Equates to the value of the current simulation date - value comes from CLOCK
+   [Input] double fertiliser;
+   [Param] double corn_price;         // The value for this will come from the Properties page.
+   [Param] double n_price;
+   [Param] double fixed_cost;
+   [Output] double N_rate_lbs_acre;
+   [Output] double GrossReturns;
+   [Output] double Ncost;
+   [Output] double FixedCost;
+   [Output] double NetReturn;// An example of how to make a variable available to other APSIM modules
+   
+   double maize_yield;
+
+   [Output] double fert_applied;
+   
+   // The following event handler will be called once at the beginning of the simulation
+   [EventHandler] public void OnInitialised()
+   {
+      fert_applied = 0.0;
+   }
+      
+   // The following event handler will be called each day at the beginning of the day
+   [EventHandler] public void OnPrepare()
+   {
+      fert_applied += fertiliser;
+      MyPaddock.Get("maize.yield", out maize_yield);
+      double maize_buac = maize_yield * 0.0159 / 0.85;
+      
+      N_rate_lbs_acre = fert_applied * 0.89;
+      GrossReturns = corn_price * maize_buac;
+      Ncost = N_rate_lbs_acre * n_price;
+      FixedCost = fixed_cost;
+      NetReturn = GrossReturns - FixedCost - Ncost;
+   }
+   
+   [EventHandler] public void OnHarvesting()
+   {
+      fert_applied = 0.0;
+   }
+   
+}
+       </text>
+        </manager2>
+        <manager name="Harvesting rule">
+          <ui>
+            <category type="category" description="Harvesting criteria" />
+            <crop type="crop" description="Enter name of crop to harvest when ripe : ">maize</crop>
+          </ui>
+          <script>
+            <text>
+           if ('[crop]' = 'cotton') then
+              if ([crop].ozcot_status &gt; 0) then
+                  [crop] harvest
+              endif
+           elseif ([crop].StageName = 'harvest_ripe' or [crop].plant_status = 'dead') then
+              [crop]  harvest
+              [crop]  end_crop
+           endif
+</text>
+            <event>end_of_day</event>
+          </script>
+        </manager>
+        <manager name="Empty manager">
+          <script>
+            <text>
+            </text>
+            <event>init</event>
+          </script>
+          <script>
+            <text>corn_buac   = maize.yield * 0.0159/0.85  ! corn yield in bushels/acre @15% moisture  
+Nupt_biomass   = biomass_n * 10 * 0.89     ! Above ground corn biomass N uptake in lbs N/acre
+Nupt_grain     = grain_n * 10 * 0.89     !  corn grain N uptake in lbs N/acre
+
+</text>
+            <event>start_of_day</event>
+          </script>
+          <script>
+            <text>
+            </text>
+            <event>end_of_day</event>
+          </script>
+        </manager>
+        <tracker />
+      </folder>
+      <outputfile>
+        <filename output="yes">70_Kenyon_83B.out</filename>
+        <title>70_Kenyon_83B</title>
+        <variables name="My Variables">
+          <variable>dd/mm/yyyy as Date</variable>
+          <variable>fert_applied</variable>
+          <variable>corn_buac</variable>
+          <variable>GrossReturns</variable>
+          <variable>NetReturn</variable>
+          <variable>Ncost</variable>
+          <variable>FixedCost</variable>
+          <variable>Nupt_biomass</variable>
+          <variable>biomass</variable>
+          <variable>plants</variable>
+        </variables>
+        <events name="My Variables Events">
+          <event>harvesting</event>
+        </events>
+      </outputfile>
+  <Soil name="(Kenyon_83B 41% of AOI)">
+    <RecordNumber>5</RecordNumber>
+    <SoilType>Kenyon_83B</SoilType>
+    <Region>Floyd</Region>
+    <State>Iowa</State>
+    <Country>USA</Country>
+    <ApsoilNumber>1</ApsoilNumber>
+    <Latitude>42.93</Latitude>
+    <Longitude>-92.57</Longitude>
+    <YearOfSampling>2018</YearOfSampling>
+    <DataSource>ssurgo2apsim</DataSource>
+    <Comments>This soil was created with data from SSURGO Database, downloaded in R via the FedData package and parameters set using the approach described by Archontoulis et al. (2014, Agron. J. 106(3):1025-1040). This soil type represents 41% of AOI.</Comments>
+    <Water>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <BD>
+        <double>1.28</double>
+        <double>1.41</double>
+        <double>1.55</double>
+        <double>1.61</double>
+        <double>1.71</double>
+        <double>1.75</double>
+        <double>1.75</double>
+        <double>1.77</double>
+        <double>1.8</double>
+      </BD>
+      <AirDry>
+        <double>0.13</double>
+        <double>0.14</double>
+        <double>0.17</double>
+        <double>0.18</double>
+        <double>0.18</double>
+        <double>0.18</double>
+        <double>0.18</double>
+        <double>0.17</double>
+        <double>0.17</double>
+      </AirDry>
+      <LL15>
+        <double>0.14</double>
+        <double>0.15</double>
+        <double>0.17</double>
+        <double>0.18</double>
+        <double>0.18</double>
+        <double>0.18</double>
+        <double>0.18</double>
+        <double>0.17</double>
+        <double>0.17</double>
+      </LL15>
+      <DUL>
+        <double>0.29</double>
+        <double>0.3</double>
+        <double>0.31</double>
+        <double>0.3</double>
+        <double>0.29</double>
+        <double>0.28</double>
+        <double>0.28</double>
+        <double>0.28</double>
+        <double>0.27</double>
+      </DUL>
+      <SAT>
+        <double>0.4</double>
+        <double>0.4</double>
+        <double>0.41</double>
+        <double>0.41</double>
+        <double>0.4</double>
+        <double>0.4</double>
+        <double>0.4</double>
+        <double>0.4</double>
+        <double>0.4</double>
+      </SAT>
+      <KS>
+        <double>158.3</double>
+        <double>152.95</double>
+        <double>120.48</double>
+        <double>115.4</double>
+        <double>112.24</double>
+        <double>60.5</double>
+        <double>60.5</double>
+        <double>60.5</double>
+        <double>60.5</double>
+      </KS>
+      <SoilCrop name="maize">
+        <Thickness>
+          <double>100</double>
+          <double>200</double>
+          <double>150</double>
+          <double>150</double>
+          <double>200</double>
+          <double>200</double>
+          <double>200</double>
+          <double>400</double>
+          <double>390</double>
+        </Thickness>
+        <LL>
+          <double>0.14</double>
+          <double>0.15</double>
+          <double>0.17</double>
+          <double>0.18</double>
+          <double>0.18</double>
+          <double>0.18</double>
+          <double>0.18</double>
+          <double>0.17</double>
+          <double>0.17</double>
+        </LL>
+        <KL>
+          <double>0.08</double>
+          <double>0.078</double>
+          <double>0.069</double>
+          <double>0.062</double>
+          <double>0.055</double>
+          <double>0.048</double>
+          <double>0.042</double>
+          <double>0.034</double>
+          <double>0.026</double>
+        </KL>
+        <XF>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>0.75</double>
+          <double>0</double>
+        </XF>
+      </SoilCrop>
+      <SoilCrop name="soybean">
+        <Thickness>
+          <double>100</double>
+          <double>200</double>
+          <double>150</double>
+          <double>150</double>
+          <double>200</double>
+          <double>200</double>
+          <double>200</double>
+          <double>400</double>
+          <double>390</double>
+        </Thickness>
+        <LL>
+          <double>0.14</double>
+          <double>0.15</double>
+          <double>0.17</double>
+          <double>0.18</double>
+          <double>0.18</double>
+          <double>0.18</double>
+          <double>0.18</double>
+          <double>0.17</double>
+          <double>0.17</double>
+        </LL>
+        <KL>
+          <double>0.08</double>
+          <double>0.078</double>
+          <double>0.069</double>
+          <double>0.062</double>
+          <double>0.055</double>
+          <double>0.048</double>
+          <double>0.042</double>
+          <double>0.034</double>
+          <double>0.026</double>
+        </KL>
+        <XF>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>0.75</double>
+          <double>0</double>
+        </XF>
+      </SoilCrop>
+    </Water>
+    <SoilWater>
+      <SummerCona>3.77</SummerCona>
+      <SummerU>8.55</SummerU>
+      <SummerDate>1-jun</SummerDate>
+      <WinterCona>3.77</WinterCona>
+      <WinterU>8.55</WinterU>
+      <WinterDate>1-nov</WinterDate>
+      <DiffusConst>40</DiffusConst>
+      <DiffusSlope>16</DiffusSlope>
+      <Salb>0.15</Salb>
+      <CN2Bare>84</CN2Bare>
+      <CNRed>20</CNRed>
+      <CNCov>0.8</CNCov>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <SWCON>
+        <double>0.439</double>
+        <double>0.358</double>
+        <double>0.249</double>
+        <double>0.225</double>
+        <double>0.183</double>
+        <double>0.164</double>
+        <double>0.164</double>
+        <double>0.156</double>
+        <double>0.146</double>
+      </SWCON>
+    </SoilWater>
+    <SoilOrganicMatter>
+      <RootCN>45</RootCN>
+      <RootWt>1000</RootWt>
+      <SoilCN>13</SoilCN>
+      <EnrACoeff>7.4</EnrACoeff>
+      <EnrBCoeff>0.2</EnrBCoeff>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <OC>
+        <double>1.69</double>
+        <double>1.66</double>
+        <double>1.22</double>
+        <double>0.72</double>
+        <double>0.42</double>
+        <double>0.28</double>
+        <double>0.04</double>
+        <double>0.21</double>
+        <double>0.01</double>
+      </OC>
+      <FBiom>
+        <double>0.04</double>
+        <double>0.0245</double>
+        <double>0.014</double>
+        <double>0.011</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+      </FBiom>
+      <FInert>
+        <double>0.4</double>
+        <double>0.484</double>
+        <double>0.624</double>
+        <double>0.744</double>
+        <double>0.8</double>
+        <double>0.8</double>
+        <double>0.8</double>
+        <double>0.8696</double>
+        <double>0.9773</double>
+      </FInert>
+      <OCUnits>Total</OCUnits>
+    </SoilOrganicMatter>
+    <Analysis>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <PH>
+        <double>6.67</double>
+        <double>6.52</double>
+        <double>6.48</double>
+        <double>6.62</double>
+        <double>6.73</double>
+        <double>6.77</double>
+        <double>6.77</double>
+        <double>7.07</double>
+        <double>7.41</double>
+      </PH>
+      <ParticleSizeSand>
+        <double>36</double>
+        <double>34.6</double>
+        <double>32.5</double>
+        <double>35.8</double>
+        <double>42.4</double>
+        <double>45</double>
+        <double>45</double>
+        <double>44.5</double>
+        <double>44</double>
+      </ParticleSizeSand>
+      <ParticleSizeClay>
+        <double>21</double>
+        <double>21</double>
+        <double>23.4</double>
+        <double>25</double>
+        <double>25</double>
+        <double>25</double>
+        <double>25</double>
+        <double>24.5</double>
+        <double>24</double>
+      </ParticleSizeClay>
+      <ParticleSizeSilt>
+        <double>43</double>
+        <double>44.4</double>
+        <double>44.1</double>
+        <double>39.2</double>
+        <double>32.6</double>
+        <double>30</double>
+        <double>30</double>
+        <double>30.9</double>
+        <double>32</double>
+      </ParticleSizeSilt>
+    </Analysis>
+    <Sample name="Intial conditions">
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <NO3>
+        <double>1.69</double>
+        <double>1.66</double>
+        <double>1.22</double>
+        <double>0.72</double>
+        <double>0.42</double>
+        <double>0.28</double>
+        <double>0.04</double>
+        <double>0.21</double>
+        <double>0.01</double>
+      </NO3>
+      <NH4>
+        <double>0.84</double>
+        <double>0.83</double>
+        <double>0.61</double>
+        <double>0.36</double>
+        <double>0.21</double>
+        <double>0.14</double>
+        <double>0.02</double>
+        <double>0.1</double>
+        <double>0</double>
+      </NH4>
+      <SW>
+        <double>0.29</double>
+        <double>0.3</double>
+        <double>0.31</double>
+        <double>0.3</double>
+        <double>0.29</double>
+        <double>0.28</double>
+        <double>0.28</double>
+        <double>0.28</double>
+        <double>0.27</double>
+      </SW>
+      <NO3Units>ppm</NO3Units>
+      <NH4Units>ppm</NH4Units>
+      <SWUnits>Volumetric</SWUnits>
+    </Sample>
+  </Soil>
+    </area>
+  </simulation>
+  <simulation name="70_Readlyn_399">
+    <metfile name="met">
+      <filename name="filename" input="yes">..\Iowa NE.met</filename>
+    </metfile>
+    <clock>
+      <start_date type="date" description="Enter the start date of the simulation">01/01/1999</start_date>
+      <end_date type="date" description="Enter the end date of the simulation">31/12/2009</end_date>
+    </clock>
+    <summaryfile />
+    <area name="paddock">
+      <surfaceom name="SurfaceOrganicMatter">
+        <PoolName type="text" description="Organic Matter pool name">soybean</PoolName>
+        <type type="text" description="Organic Matter type">soybean</type>
+        <mass type="text" description="Initial surface residue (kg/ha)">1250</mass>
+        <cnr type="text" description="C:N ratio of initial residue">27</cnr>
+        <standing_fraction type="text" description="Fraction of residue standing">0.0</standing_fraction>
+      </surfaceom>
+      <fertiliser />
+      <maize />
+      <folder name="Manager folder">
+        <manager name="Sow on a fixed date">
+          <ui>
+            <category type="category" description="Sowing criteria" />
+            <date type="text" description="Enter sowing date (dd-mmm) : ">1-may</date>
+            <category type="category" description="Sowing parameters" />
+            <crop type="crop" description="Enter name of crop to sow : ">maize</crop>
+            <density type="text" description="Enter sowing density  (plants/m2) : ">8</density>
+            <depth type="text" description="Enter sowing depth  (mm) : ">50</depth>
+            <cultivar type="cultivars" description="Enter cultivar : ">A_110</cultivar>
+            <class type="classes" description="Enter crop growth class : ">plant</class>
+            <row_spacing type="text" description="Enter row spacing (mm) : ">760</row_spacing>
+          </ui>
+          <script>
+            <text>
+        if (today = date('[date]') then
+              [crop] sow plants =[density], sowing_depth = [depth], cultivar = [cultivar], row_spacing = [row_spacing], crop_class = [class]
+         endif
+               </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager name="Tillage on fixed date">
+          <ui>
+            <category type="category" description="When should tillage be done" />
+            <tillage_date type="ddmmmdate" description="Enter tillage date (dd-mmm) : ">10-apr</tillage_date>
+            <category type="category" description="Tillage application details" />
+            <surfaceommodule type="modulename" description="Module used to apply the tillage : ">SurfaceOrganicMatter</surfaceommodule>
+            <tillage_type type="list" listvalues="user_defined, chisel, disc, planter, burn, burn_90, graze, scarifier, rip, blade, tine" description="Tillage type : ">user_defined</tillage_type>
+            <tillage_depth type="text" description="User_defined depth of seedbed preparation (mm) : ">110</tillage_depth>
+            <tillage_f_incorp type="text" description="User_defined fraction of surface residues to incorporate (0-1): ">0.4</tillage_f_incorp>
+          </ui>
+          <script>
+            <text>
+         if (today = date('[tillage_date]') then
+            if ('[tillage_type]' = 'user_defined') then
+                '[surfaceommodule]' tillage type = [tillage_type], f_incorp = [tillage_f_incorp] (), tillage_depth = [tillage_depth]
+            else
+                '[surfaceommodule]' tillage type = [tillage_type]
+            endif
+            ready_to_till_pre_sow = 0
+            till_day_pre_sow = 0
+         endif
+      </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager name="Fertilise on fixed date">
+          <ui>
+            <category type="category" description="When should fertiliser be applied" />
+            <fert_date type="ddmmmdate" description="Enter fertiliser date (dd-mmm) : ">1-may</fert_date>
+            <fert_criteria type="text" description="Don't add fertiliser if N in top 2 layers exceeds (kg/ha) : ">1000</fert_criteria>
+            <category type="category" description="Fertiliser application details" />
+            <fertmodule type="modulename" description="Module used to apply the fertiliser : ">fertiliser</fertmodule>
+            <fert_amount type="text" description="Amount of fertiliser to apply (kg/ha) : ">280</fert_amount>
+            <fert_type type="list" listvalues="NO3_N, NH4_N, NH4NO3, urea_N, urea_no3, urea, nh4so4_n, rock_p, banded_p, broadcast_p" description="Fertiliser type : ">urea_N</fert_type>
+          </ui>
+          <script>
+            <text>
+         if (today = date('[fert_date]') then
+            N_topsoil = no3(1) + nh4(1) + no3(2) + nh4(2)
+            if (N_topsoil &lt; [fert_criteria]) then
+               [fertmodule] apply amount = [fert_amount] (kg/ha), depth = 50 (mm), type = [fert_type] ()
+            endif
+         endif </text>
+            <event>start_of_day</event>
+          </script>
+        </manager>
+        <manager2 name="Corn Nitrogen Prices (put before harvest rule)">
+          <ui>
+            <corn_price type="text" description="Corn price ($/bu)">5</corn_price>
+            <n_price type="text" description="Nitrogen price ($/lbs)">0.5</n_price>
+            <fixed_cost type="text" description="Fixed costs ($/acre)">600</fixed_cost>
+          </ui>
+          <text>
+using System;
+using ModelFramework;
+
+public class Script 
+{      
+   [Link] Paddock MyPaddock; // Can be used to dynamically get access to simulation structure and variables
+   [Input] DateTime Today;   // Equates to the value of the current simulation date - value comes from CLOCK
+   [Input] double fertiliser;
+   [Param] double corn_price;         // The value for this will come from the Properties page.
+   [Param] double n_price;
+   [Param] double fixed_cost;
+   [Output] double N_rate_lbs_acre;
+   [Output] double GrossReturns;
+   [Output] double Ncost;
+   [Output] double FixedCost;
+   [Output] double NetReturn;// An example of how to make a variable available to other APSIM modules
+   
+   double maize_yield;
+
+   [Output] double fert_applied;
+   
+   // The following event handler will be called once at the beginning of the simulation
+   [EventHandler] public void OnInitialised()
+   {
+      fert_applied = 0.0;
+   }
+      
+   // The following event handler will be called each day at the beginning of the day
+   [EventHandler] public void OnPrepare()
+   {
+      fert_applied += fertiliser;
+      MyPaddock.Get("maize.yield", out maize_yield);
+      double maize_buac = maize_yield * 0.0159 / 0.85;
+      
+      N_rate_lbs_acre = fert_applied * 0.89;
+      GrossReturns = corn_price * maize_buac;
+      Ncost = N_rate_lbs_acre * n_price;
+      FixedCost = fixed_cost;
+      NetReturn = GrossReturns - FixedCost - Ncost;
+   }
+   
+   [EventHandler] public void OnHarvesting()
+   {
+      fert_applied = 0.0;
+   }
+   
+}
+       </text>
+        </manager2>
+        <manager name="Harvesting rule">
+          <ui>
+            <category type="category" description="Harvesting criteria" />
+            <crop type="crop" description="Enter name of crop to harvest when ripe : ">maize</crop>
+          </ui>
+          <script>
+            <text>
+           if ('[crop]' = 'cotton') then
+              if ([crop].ozcot_status &gt; 0) then
+                  [crop] harvest
+              endif
+           elseif ([crop].StageName = 'harvest_ripe' or [crop].plant_status = 'dead') then
+              [crop]  harvest
+              [crop]  end_crop
+           endif
+</text>
+            <event>end_of_day</event>
+          </script>
+        </manager>
+        <manager name="Empty manager">
+          <script>
+            <text>
+            </text>
+            <event>init</event>
+          </script>
+          <script>
+            <text>corn_buac   = maize.yield * 0.0159/0.85  ! corn yield in bushels/acre @15% moisture  
+Nupt_biomass   = biomass_n * 10 * 0.89     ! Above ground corn biomass N uptake in lbs N/acre
+Nupt_grain     = grain_n * 10 * 0.89     !  corn grain N uptake in lbs N/acre
+
+</text>
+            <event>start_of_day</event>
+          </script>
+          <script>
+            <text>
+            </text>
+            <event>end_of_day</event>
+          </script>
+        </manager>
+        <tracker />
+      </folder>
+      <outputfile>
+        <filename output="yes">70_Readlyn_399.out</filename>
+        <title>70_Readlyn_399</title>
+        <variables name="My Variables">
+          <variable>dd/mm/yyyy as Date</variable>
+          <variable>fert_applied</variable>
+          <variable>corn_buac</variable>
+          <variable>GrossReturns</variable>
+          <variable>NetReturn</variable>
+          <variable>Ncost</variable>
+          <variable>FixedCost</variable>
+          <variable>Nupt_biomass</variable>
+          <variable>biomass</variable>
+          <variable>plants</variable>
+        </variables>
+        <events name="My Variables Events">
+          <event>harvesting</event>
+        </events>
+      </outputfile>
+  <Soil name="(Readlyn_399 33% of AOI)">
+    <RecordNumber>8</RecordNumber>
+    <SoilType>Readlyn_399</SoilType>
+    <Region>Floyd</Region>
+    <State>Iowa</State>
+    <Country>USA</Country>
+    <ApsoilNumber>1</ApsoilNumber>
+    <Latitude>42.93</Latitude>
+    <Longitude>-92.57</Longitude>
+    <YearOfSampling>2018</YearOfSampling>
+    <DataSource>ssurgo2apsim</DataSource>
+    <Comments>This soil was created with data from SSURGO Database, downloaded in R via the FedData package and parameters set using the approach described by Archontoulis et al. (2014, Agron. J. 106(3):1025-1040). This soil type represents 33% of AOI.</Comments>
+    <Water>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <BD>
+        <double>1.35</double>
+        <double>1.35</double>
+        <double>1.38</double>
+        <double>1.54</double>
+        <double>1.75</double>
+        <double>1.8</double>
+        <double>1.8</double>
+        <double>1.8</double>
+        <double>1.8</double>
+      </BD>
+      <AirDry>
+        <double>0.17</double>
+        <double>0.16</double>
+        <double>0.16</double>
+        <double>0.17</double>
+        <double>0.16</double>
+        <double>0.16</double>
+        <double>0.16</double>
+        <double>0.16</double>
+        <double>0.16</double>
+      </AirDry>
+      <LL15>
+        <double>0.18</double>
+        <double>0.18</double>
+        <double>0.16</double>
+        <double>0.17</double>
+        <double>0.16</double>
+        <double>0.16</double>
+        <double>0.16</double>
+        <double>0.16</double>
+        <double>0.16</double>
+      </LL15>
+      <DUL>
+        <double>0.32</double>
+        <double>0.31</double>
+        <double>0.3</double>
+        <double>0.3</double>
+        <double>0.27</double>
+        <double>0.26</double>
+        <double>0.26</double>
+        <double>0.26</double>
+        <double>0.26</double>
+      </DUL>
+      <SAT>
+        <double>0.41</double>
+        <double>0.41</double>
+        <double>0.41</double>
+        <double>0.41</double>
+        <double>0.41</double>
+        <double>0.41</double>
+        <double>0.4</double>
+        <double>0.4</double>
+        <double>0.4</double>
+      </SAT>
+      <KS>
+        <double>133.26</double>
+        <double>133.02</double>
+        <double>132.35</double>
+        <double>112.87</double>
+        <double>96.65</double>
+        <double>60.5</double>
+        <double>60.5</double>
+        <double>60.5</double>
+        <double>60.5</double>
+      </KS>
+      <SoilCrop name="maize">
+        <Thickness>
+          <double>100</double>
+          <double>200</double>
+          <double>150</double>
+          <double>150</double>
+          <double>200</double>
+          <double>200</double>
+          <double>200</double>
+          <double>400</double>
+          <double>390</double>
+        </Thickness>
+        <LL>
+          <double>0.18</double>
+          <double>0.18</double>
+          <double>0.16</double>
+          <double>0.17</double>
+          <double>0.16</double>
+          <double>0.16</double>
+          <double>0.16</double>
+          <double>0.16</double>
+          <double>0.16</double>
+        </LL>
+        <KL>
+          <double>0.08</double>
+          <double>0.078</double>
+          <double>0.069</double>
+          <double>0.062</double>
+          <double>0.055</double>
+          <double>0.048</double>
+          <double>0.042</double>
+          <double>0.034</double>
+          <double>0.026</double>
+        </KL>
+        <XF>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>0.75</double>
+          <double>0</double>
+        </XF>
+      </SoilCrop>
+      <SoilCrop name="soybean">
+        <Thickness>
+          <double>100</double>
+          <double>200</double>
+          <double>150</double>
+          <double>150</double>
+          <double>200</double>
+          <double>200</double>
+          <double>200</double>
+          <double>400</double>
+          <double>390</double>
+        </Thickness>
+        <LL>
+          <double>0.18</double>
+          <double>0.18</double>
+          <double>0.16</double>
+          <double>0.17</double>
+          <double>0.16</double>
+          <double>0.16</double>
+          <double>0.16</double>
+          <double>0.16</double>
+          <double>0.16</double>
+        </LL>
+        <KL>
+          <double>0.08</double>
+          <double>0.078</double>
+          <double>0.069</double>
+          <double>0.062</double>
+          <double>0.055</double>
+          <double>0.048</double>
+          <double>0.042</double>
+          <double>0.034</double>
+          <double>0.026</double>
+        </KL>
+        <XF>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>1</double>
+          <double>0.75</double>
+          <double>0</double>
+        </XF>
+      </SoilCrop>
+    </Water>
+    <SoilWater>
+      <SummerCona>3.83</SummerCona>
+      <SummerU>8.65</SummerU>
+      <SummerDate>1-jun</SummerDate>
+      <WinterCona>3.83</WinterCona>
+      <WinterU>8.65</WinterU>
+      <WinterDate>1-nov</WinterDate>
+      <DiffusConst>40</DiffusConst>
+      <DiffusSlope>16</DiffusSlope>
+      <Salb>0.15</Salb>
+      <CN2Bare>82</CN2Bare>
+      <CNRed>20</CNRed>
+      <CNCov>0.8</CNCov>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <SWCON>
+        <double>0.354</double>
+        <double>0.364</double>
+        <double>0.365</double>
+        <double>0.274</double>
+        <double>0.202</double>
+        <double>0.184</double>
+        <double>0.179</double>
+        <double>0.202</double>
+        <double>0.205</double>
+      </SWCON>
+    </SoilWater>
+    <SoilOrganicMatter>
+      <RootCN>45</RootCN>
+      <RootWt>1000</RootWt>
+      <SoilCN>13</SoilCN>
+      <EnrACoeff>7.4</EnrACoeff>
+      <EnrBCoeff>0.2</EnrBCoeff>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <OC>
+        <double>2.91</double>
+        <double>2.56</double>
+        <double>1.83</double>
+        <double>1.29</double>
+        <double>0.77</double>
+        <double>0.44</double>
+        <double>0.27</double>
+        <double>0.08</double>
+        <double>0.01</double>
+      </OC>
+      <FBiom>
+        <double>0.04</double>
+        <double>0.0245</double>
+        <double>0.014</double>
+        <double>0.011</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+        <double>0.01</double>
+      </FBiom>
+      <FInert>
+        <double>0.4</double>
+        <double>0.484</double>
+        <double>0.624</double>
+        <double>0.744</double>
+        <double>0.8</double>
+        <double>0.8</double>
+        <double>0.8</double>
+        <double>0.8696</double>
+        <double>0.9773</double>
+      </FInert>
+      <OCUnits>Total</OCUnits>
+    </SoilOrganicMatter>
+    <Analysis>
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <PH>
+        <double>7.09</double>
+        <double>7.09</double>
+        <double>7.09</double>
+        <double>6.85</double>
+        <double>7.73</double>
+        <double>8.15</double>
+        <double>8.22</double>
+        <double>8.44</double>
+        <double>8.47</double>
+      </PH>
+      <ParticleSizeSand>
+        <double>35</double>
+        <double>35</double>
+        <double>35</double>
+        <double>33.3</double>
+        <double>39.1</double>
+        <double>42</double>
+        <double>42.4</double>
+        <double>43.8</double>
+        <double>44</double>
+      </ParticleSizeSand>
+      <ParticleSizeClay>
+        <double>23</double>
+        <double>23</double>
+        <double>23</double>
+        <double>24.5</double>
+        <double>26.4</double>
+        <double>27</double>
+        <double>25.9</double>
+        <double>22.4</double>
+        <double>22</double>
+      </ParticleSizeClay>
+      <ParticleSizeSilt>
+        <double>42</double>
+        <double>42</double>
+        <double>42</double>
+        <double>42.2</double>
+        <double>34.4</double>
+        <double>31</double>
+        <double>31.7</double>
+        <double>33.7</double>
+        <double>34</double>
+      </ParticleSizeSilt>
+    </Analysis>
+    <Sample name="Intial conditions">
+      <Thickness>
+        <double>100</double>
+        <double>200</double>
+        <double>150</double>
+        <double>150</double>
+        <double>200</double>
+        <double>200</double>
+        <double>200</double>
+        <double>400</double>
+        <double>390</double>
+      </Thickness>
+      <NO3>
+        <double>2.91</double>
+        <double>2.56</double>
+        <double>1.83</double>
+        <double>1.29</double>
+        <double>0.77</double>
+        <double>0.44</double>
+        <double>0.27</double>
+        <double>0.08</double>
+        <double>0.01</double>
+      </NO3>
+      <NH4>
+        <double>1.45</double>
+        <double>1.28</double>
+        <double>0.92</double>
+        <double>0.64</double>
+        <double>0.38</double>
+        <double>0.22</double>
+        <double>0.13</double>
+        <double>0.04</double>
+        <double>0</double>
+      </NH4>
+      <SW>
+        <double>0.32</double>
+        <double>0.31</double>
+        <double>0.3</double>
+        <double>0.3</double>
+        <double>0.27</double>
+        <double>0.26</double>
+        <double>0.26</double>
+        <double>0.26</double>
+        <double>0.26</double>
+      </SW>
+      <NO3Units>ppm</NO3Units>
+      <NH4Units>ppm</NH4Units>
+      <SWUnits>Volumetric</SWUnits>
+    </Sample>
+  </Soil>
+    </area>
+  </simulation>
+</folder>
